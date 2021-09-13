@@ -45,12 +45,12 @@ public class DorisSinkExample {
                         ") " +
                         "WITH (\n" +
                         "  'connector' = 'doris',\n" +
-                        "  'fenodes' = 'FE_IP:8030',\n" +
-                        "  'table.identifier' = 'db.table',\n" +
+                        "  'fenodes' = '10.220.146.10:8030',\n" +
+                        "  'table.identifier' = 'test1.doris_test_sink_2',\n" +
                         "  'username' = 'root',\n" +
                         "  'password' = ''\n" +
                         ")");
 
-        tEnv.executeSql("INSERT INTO doris_test_sink select name,age from doris_test");
+        tEnv.executeSql("INSERT INTO doris_test_sink select name,age from doris_test limit 10");
     }
 }

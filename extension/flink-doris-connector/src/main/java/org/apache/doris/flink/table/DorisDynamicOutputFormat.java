@@ -25,14 +25,24 @@ import org.apache.doris.flink.rest.RestService;
 import org.apache.flink.api.common.io.RichOutputFormat;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.runtime.util.ExecutorThreadFactory;
+import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
+import org.apache.flink.table.data.binary.BinaryRowData;
+import org.apache.flink.table.types.DataType;
+import org.apache.flink.table.types.logical.LogicalType;
+import org.apache.flink.types.Row;
+import org.apache.flink.util.Preconditions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import scala.annotation.meta.field;
 
+import javax.xml.crypto.Data;
 import java.io.IOException;
+import java.io.Serializable;
 import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Properties;
 import java.util.StringJoiner;
@@ -40,6 +50,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 
 
 /**
@@ -60,7 +71,7 @@ public class DorisDynamicOutputFormat extends RichOutputFormat<RowData> {
     private DorisReadOptions readOptions;
     private DorisExecutionOptions executionOptions;
     private DorisStreamLoad dorisStreamLoad;
-
+    private LogicalType[] fieldTypes;
 
     private final List<String> batch = new ArrayList<>();
     private transient volatile boolean closed = false;
@@ -69,12 +80,13 @@ public class DorisDynamicOutputFormat extends RichOutputFormat<RowData> {
     private transient ScheduledFuture<?> scheduledFuture;
     private transient volatile Exception flushException;
 
-    public DorisDynamicOutputFormat(DorisOptions option, DorisReadOptions readOptions, DorisExecutionOptions executionOptions) {
+    public DorisDynamicOutputFormat(DorisOptions option, DorisReadOptions readOptions, DorisExecutionOptions executionOptions, LogicalType[] fieldTypes) {
         this.options = option;
         this.readOptions = readOptions;
         this.executionOptions = executionOptions;
         this.fieldDelimiter = executionOptions.getStreamLoadProp().getProperty(FIELD_DELIMITER_KEY, FIELD_DELIMITER_DEFAULT);
         this.lineDelimiter = executionOptions.getStreamLoadProp().getProperty(LINE_DELIMITER_KEY, LINE_DELIMITER_DEFAULT);
+        this.fieldTypes = fieldTypes;
     }
 
     @Override
@@ -125,15 +137,47 @@ public class DorisDynamicOutputFormat extends RichOutputFormat<RowData> {
     }
 
     private void addBatch(RowData row) {
+        Preconditions.checkState(fieldTypes.length == row.getArity(),"the number of fields from table schema and row data is not equal");
         StringJoiner value = new StringJoiner(this.fieldDelimiter);
-        GenericRowData rowData = (GenericRowData) row;
-        for (int i = 0; i < row.getArity(); ++i) {
-            Object field = rowData.getField(i);
+        for(int i =0;i<row.getArity();i++){
+            Object field = RowData.createFieldGetter(fieldTypes[i], i).getFieldOrNull(row);
             if (field != null) {
-                value.add(field.toString());
+                value.add(String.valueOf(field));
             } else {
                 value.add(NULL_VALUE);
             }
+//            switch (fieldType.getTypeRoot()){
+//
+//                case BOOLEAN:
+//                    appendField(value,row.getBoolean(i));
+//                    break;
+//                case TINYINT:
+//                    appendField(value,row.get(i));
+//                    break;
+//                case SMALLINT:
+//                    appendField(value,row.getBoolean(i));
+//                    break;
+//                case INTEGER:
+//                    appendField(value,row.getBoolean(i));
+//                    break;
+//                case BIGINT:
+//                    appendField(value,row.getBoolean(i));
+//                    break;
+//                case FLOAT:
+//                    appendField(value,row.getFloat(i));
+//                    break;
+//                case DOUBLE:
+//                    appendField(value,row.getDouble(i));
+//                case DECIMAL:
+//                    appendField();
+//                case DATE:
+//
+//                case TIMESTAMP_WITH_TIME_ZONE:
+//                    appendField();
+//                default:
+//                    LOG.info("can not match type:{},use string to substitute", fieldType);
+//                    appendField(value,row.getString(i));;
+//            }
         }
         batch.add(value.toString());
     }
@@ -213,6 +257,7 @@ public class DorisDynamicOutputFormat extends RichOutputFormat<RowData> {
         private DorisOptions.Builder optionsBuilder;
         private DorisReadOptions readOptions;
         private DorisExecutionOptions executionOptions;
+        private DataType[] fieldDataTypes;
 
         public Builder() {
             this.optionsBuilder = DorisOptions.builder();
@@ -248,10 +293,30 @@ public class DorisDynamicOutputFormat extends RichOutputFormat<RowData> {
             return this;
         }
 
+        public Builder setFieldDataTypes(DataType[] fieldDataTypes) {
+            this.fieldDataTypes = fieldDataTypes;
+            return this;
+        }
+
         public DorisDynamicOutputFormat build() {
+            final LogicalType[] logicalTypes =
+                    Arrays.stream(fieldDataTypes)
+                            .map(DataType::getLogicalType)
+                            .toArray(LogicalType[]::new);
             return new DorisDynamicOutputFormat(
-                    optionsBuilder.build(), readOptions, executionOptions
+                    optionsBuilder.build(), readOptions, executionOptions, logicalTypes
             );
+        }
+    }
+
+    /**
+     * An interface to extract a value from given argument.
+     * @param <F> The type of given argument
+     * @param <T> The type of the return value
+     */
+    public interface RecordExtractor<F, T> extends Function<F, T>, Serializable {
+        static <T> RecordExtractor<T, T> identity() {
+            return x -> x;
         }
     }
 }

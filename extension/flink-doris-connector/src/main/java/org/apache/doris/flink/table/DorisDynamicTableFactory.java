@@ -266,12 +266,14 @@ public final class DorisDynamicTableFactory implements DynamicTableSourceFactory
         // validate all options
         helper.validateExcept(STREAM_LOAD_PROP_PREFIX);
 
+        TableSchema physicalSchema = TableSchemaUtils.getPhysicalSchema(context.getCatalogTable().getSchema());
         Properties streamLoadProp = getStreamLoadProp(context.getCatalogTable().getOptions());
         // create and return dynamic table source
         return new DorisDynamicTableSink(
                 getDorisOptions(helper.getOptions()),
                 getDorisReadOptions(helper.getOptions()),
-                getDorisExecutionOptions(helper.getOptions(), streamLoadProp)
+                getDorisExecutionOptions(helper.getOptions(), streamLoadProp),
+                physicalSchema
         );
     }
 }
