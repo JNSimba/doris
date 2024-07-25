@@ -68,13 +68,17 @@ struct TypeDescriptor {
     TypeDescriptor() : type(INVALID_TYPE), len(-1), precision(-1), scale(-1) {}
 
     // explicit TypeDescriptor(PrimitiveType type) :
-    TypeDescriptor(PrimitiveType type) : type(type), len(-1), precision(-1), scale(-1) {
+    TypeDescriptor(PrimitiveType type, int64_t scale = -1) : type(type), len(-1), precision(-1), scale(scale) {
         if (type == TYPE_DECIMALV2) {
             precision = 27;
-            scale = 9;
+            if(scale == -1){
+                scale = 9;
+            }
         } else if (type == TYPE_DATETIMEV2) {
             precision = 18;
-            scale = 6;
+            if(scale == -1){
+                scale = 6;
+            }
         }
     }
 
