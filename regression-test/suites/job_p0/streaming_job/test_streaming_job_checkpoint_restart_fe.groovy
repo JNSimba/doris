@@ -95,11 +95,6 @@ suite("test_streaming_job_checkpoint_restart_fe", "docker") {
             throw ex;
         }
 
-        // Pause job and verify loadStatistic before checkpoint
-        sql """
-            PAUSE JOB where jobname =  '${jobName}'
-        """
-
         def jobInfo = sql """
             select currentOffset, endoffset, loadStatistic from jobs("type"="insert") where Name='${jobName}'
         """
