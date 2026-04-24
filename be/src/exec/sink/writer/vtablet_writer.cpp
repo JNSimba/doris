@@ -688,6 +688,16 @@ void VNodeChannel::incremental_open() {
 }
 
 Status VNodeChannel::open_wait() {
+    DBUG_EXECUTE_IF("VNodeChannel.open_wait.failed", {
+        int64_t target_be_id = dp->param<int64_t>("target_be_id", -1);
+        if (target_be_id == -1 || _node_id == target_be_id) {
+            _cancelled = true;
+            return Status::Error<ErrorCode::INTERNAL_ERROR>(
+                    "fake host down injected by debug point VNodeChannel.open_wait.failed, "
+                    "info={}",
+                    channel_info());
+        }
+    });
     Status status;
     for (auto& open_callback : _open_callbacks) {
         // because of incremental open, we will wait multi times. so skip the closures which have been checked and set to nullptr in previous rounds
