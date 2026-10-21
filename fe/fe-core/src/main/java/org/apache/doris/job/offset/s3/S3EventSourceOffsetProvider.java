@@ -21,9 +21,7 @@ import org.apache.doris.datasource.storage.StorageAdapter;
 import org.apache.doris.filesystem.FileSystem;
 import org.apache.doris.filesystem.properties.S3CompatibleFileSystemProperties;
 import org.apache.doris.filesystem.spi.ObjFileSystem;
-import org.apache.doris.filesystem.spi.ObjStorage;
 import org.apache.doris.filesystem.spi.ObjectStorageUri;
-import org.apache.doris.filesystem.spi.RemoteObject;
 import org.apache.doris.filesystem.spi.S3CompatibleFileSystem;
 import org.apache.doris.fs.FileSystemFactory;
 import org.apache.doris.job.exception.JobException;
@@ -60,7 +58,6 @@ import software.amazon.awssdk.services.sqs.model.QueueAttributeName;
 import software.amazon.awssdk.services.sqs.model.ReceiveMessageRequest;
 import software.amazon.awssdk.services.sqs.model.ReceiveMessageResponse;
 
-import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -248,7 +245,6 @@ public class S3EventSourceOffsetProvider implements SourceOffsetProvider {
         TaskBatch batch = null;
         try {
             SqsClient client;
-            ObjStorage<?> objectStorage;
             List<String> receipts;
             synchronized (this) {
                 if (closed) {
@@ -277,7 +273,6 @@ public class S3EventSourceOffsetProvider implements SourceOffsetProvider {
                     }
                 }
                 client = sqsClient;
-                objectStorage = ((ObjFileSystem) fileSystem).getObjStorage();
                 batch = readyBatch != null ? readyBatch : runningBatch;
                 receipts = new ArrayList<>(batch == null ? receiptsToDelete : batch.receiptHandles);
             }
@@ -293,7 +288,7 @@ public class S3EventSourceOffsetProvider implements SourceOffsetProvider {
                 if (!receipts.isEmpty()) {
                     deletePendingMessages(client, receipts);
                 }
-                receiveBatch(client, objectStorage, jobProperties, visibilityTimeoutSeconds);
+                receiveBatch(client, jobProperties, visibilityTimeoutSeconds);
             } finally {
                 if (!closed) {
                     refreshApproximateNumberOfMessages(client);
@@ -391,7 +386,7 @@ public class S3EventSourceOffsetProvider implements SourceOffsetProvider {
     }
 
     private void receiveBatch(
-            SqsClient sqsClient, ObjStorage<?> objectStorage, StreamingJobProperties jobProperties,
+            SqsClient sqsClient, StreamingJobProperties jobProperties,
             int visibilityTimeoutSeconds) {
         List<String> files = new ArrayList<>();
         List<String> receipts = new ArrayList<>();
@@ -425,7 +420,7 @@ public class S3EventSourceOffsetProvider implements SourceOffsetProvider {
                 break;
             }
 
-            List<ParsedMessage> candidates = parseMessages(sqsClient, objectStorage, messages, receipts);
+            List<ParsedMessage> candidates = parseMessages(sqsClient, messages, receipts);
             // Delete skipped messages before filtering them out or stopping at the batch limit.
             // Messages selected for INSERT are deleted only after the task commits.
             deleteSkippedMessages(sqsClient, candidates, receipts);
@@ -468,14 +463,14 @@ public class S3EventSourceOffsetProvider implements SourceOffsetProvider {
     }
 
     private List<ParsedMessage> parseMessages(
-            SqsClient sqsClient, ObjStorage<?> objectStorage, List<Message> messages, List<String> acceptedReceipts) {
+            SqsClient sqsClient, List<Message> messages, List<String> acceptedReceipts) {
         try {
             List<ParsedMessage> parsedMessages = new ArrayList<>(messages.size());
             for (Message message : messages) {
                 if (StringUtils.isBlank(message.receiptHandle())) {
                     throw new IllegalArgumentException("SQS message has no receipt handle");
                 }
-                parsedMessages.add(parseMessage(message, objectStorage));
+                parsedMessages.add(parseMessage(message));
             }
             return parsedMessages;
         } catch (RuntimeException e) {
@@ -508,7 +503,7 @@ public class S3EventSourceOffsetProvider implements SourceOffsetProvider {
         }
     }
 
-    private ParsedMessage parseMessage(Message message, ObjStorage<?> objectStorage) {
+    private ParsedMessage parseMessage(Message message) {
         S3EventNotification notification;
         try {
             JsonNode json = Jackson.getObjectMapper().reader()
@@ -575,21 +570,9 @@ public class S3EventSourceOffsetProvider implements SourceOffsetProvider {
                 continue;
             }
             String path = "s3://" + bucket + "/" + key;
-            RemoteObject object;
-            try {
-                // Notifications can outlive an overwrite; refresh both scan size and cache identity.
-                object = objectStorage.headObject(path);
-            } catch (FileNotFoundException e) {
-                log.info("Skip missing S3 EVENT object: jobId={}, messageId={}, path={}",
-                        jobId, message.messageId(), path);
-                continue;
-            } catch (IOException e) {
-                throw new IllegalStateException("Failed to read S3 EVENT object metadata: " + path, e);
-            }
             files.add(key);
-            // The object must remain unchanged until ingestion completes; notifications identify keys, not versions.
-            fileStatuses.add(new TBrokerFileStatus(path, false, object.getSize(), true)
-                    .setModificationTime(object.getModificationTime()));
+            fileStatuses.add(new TBrokerFileStatus(path, false, record.getS3().getObject().getSizeAsLong(), true)
+                    .setModificationTime(System.currentTimeMillis()));
             if (record.getEventTime() != null) {
                 eventTimestampSeconds = Math.max(eventTimestampSeconds, record.getEventTime().getMillis() / 1000);
             }
